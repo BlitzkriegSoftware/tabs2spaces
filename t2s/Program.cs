@@ -15,77 +15,92 @@ namespace t2s
             string stdin = null;
             StringBuilder builder = new StringBuilder();
 
-            if (Console.IsInputRedirected)
+            if((args.Length > 0) && (args[0].ToLowerInvariant() == "--help"))
             {
-                #region "Redirect"
-                using (Stream stream = Console.OpenStandardInput())
+                Console.WriteLine("t2s converts tabs to '{0}' spaces  (for fixing YAML)", Pad);
+                Console.WriteLine("The Environment Variable `PAD` overrides the number of spaces");
+                return;
+            }
+
+            try
+            {
+
+                if (Console.IsInputRedirected)
                 {
-                    byte[] buffer = new byte[1000];
-                    int read = -1;
-                    while (true)
+                    #region "Redirect"
+                    using (Stream stream = Console.OpenStandardInput())
                     {
-                        AutoResetEvent gotInput = new AutoResetEvent(false);
-                        Thread inputThread = new Thread(() =>
+                        byte[] buffer = new byte[1000];
+                        int read = -1;
+                        while (true)
                         {
-                            try
+                            AutoResetEvent gotInput = new AutoResetEvent(false);
+                            Thread inputThread = new Thread(() =>
                             {
-                                read = stream.Read(buffer, 0, buffer.Length);
-                                gotInput.Set();
-                            }
-                            catch (ThreadAbortException)
+                                try
+                                {
+                                    read = stream.Read(buffer, 0, buffer.Length);
+                                    gotInput.Set();
+                                }
+                                catch (ThreadAbortException)
+                                {
+                                    Thread.ResetAbort();
+                                }
+                            })
                             {
-                                Thread.ResetAbort();
+                                IsBackground = true
+                            };
+
+                            inputThread.Start();
+
+                            // Timeout expired?
+                            if (!gotInput.WaitOne(100))
+                            {
+                                inputThread.Abort();
+                                break;
                             }
-                        })
-                        {
-                            IsBackground = true
-                        };
 
-                        inputThread.Start();
+                            // End of stream?
+                            if (read == 0)
+                            {
+                                stdin = builder.ToString();
+                                break;
+                            }
 
-                        // Timeout expired?
-                        if (!gotInput.WaitOne(100))
-                        {
-                            inputThread.Abort();
-                            break;
+                            // Got data
+                            builder.Append(Console.InputEncoding.GetString(buffer, 0, read));
                         }
-
-                        // End of stream?
-                        if (read == 0)
-                        {
-                            stdin = builder.ToString();
-                            break;
-                        }
-
-                        // Got data
-                        builder.Append(Console.InputEncoding.GetString(buffer, 0, read));
                     }
+                    #endregion
                 }
-                #endregion
+                else
+                {
+                    #region "Read from file"
+                    if (args.Length <= 0) throw new FileNotFoundException("No filename given");
+                    string fileIn = args[0];
+                    if (!File.Exists(fileIn)) throw new FileNotFoundException("File not found", fileIn);
+                    var buf = File.ReadAllText(fileIn);
+                    builder.Append(buf);
+                    buf = null;
+                    #endregion
+                }
+
+                if (builder.Length <= 0) throw new ArgumentNullException("STDIN", "No data to convert");
+
+                builder = builder.Replace("\t", Padder());
+
+                Console.Out.Write(builder.ToString());
             }
-            else
+            catch (Exception ex)
             {
-                #region "Read from file"
-                string fileIn = args[0];
-                if (string.IsNullOrWhiteSpace(fileIn)) throw new FileNotFoundException("No filename given", fileIn);
-                if (!File.Exists(fileIn)) throw new FileNotFoundException("File not found", fileIn);
-                var buf = File.ReadAllText(fileIn);
-                builder.Append(buf);
-                buf = null;
-                #endregion
+                Console.Error.WriteLine("Exception: {0}", ex.Message);
             }
-
-            if (builder.Length <= 0) throw new ArgumentNullException("STDIN", "No data to convert");
-
-            builder = builder.Replace("\t", Padder());
-
-            Console.Out.Write(builder.ToString());
         }
 
         #region "Pad"
 
-        const int Pad_Default = 3;
-        static int _pad = 3;
+        const int Pad_Default = 2;
+        static int _pad = Pad_Default;
 
         static int Pad
         {
